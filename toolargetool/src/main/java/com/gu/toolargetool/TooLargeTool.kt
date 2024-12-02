@@ -5,7 +5,10 @@ import android.os.Bundle
 import android.os.Parcel
 import android.os.Parcelable
 import android.util.Log
+import java.io.Serializable
 import java.util.*
+import kotlin.reflect.full.primaryConstructor
+import kotlin.reflect.jvm.isAccessible
 
 /**
  * A collection of helper methods to assist you in debugging crashes due to
@@ -143,45 +146,133 @@ object TooLargeTool {
  * @param bundle to measure
  * @return a map from keys to value sizes in bytes
  */
-fun sizeTreeFromBundle(bundle: Bundle, keyName: String = "root"): SizeTree {
-    val results = ArrayList<SizeTree>(bundle.size())
-    // We measure the totalSize of each value by measuring the total totalSize of the bundle before and
-    // after removing that value and calculating the difference. We make a copy of the original
-    // bundle so we can put all the original values back at the end. It's not possible to
-    // carry out the measurements on the copy because of the way Android parcelables work
-    // under the hood where certain objects are actually stored as references.
+fun sizeTreeFromBundle(bundle: Bundle, keyName: String = "Bundle"): SizeTree {
+    val results = ArrayList<SizeTree>()
     val copy = Bundle(bundle)
+
     try {
         var bundleSize = sizeAsParcel(bundle)
-        // Iterate over copy's keys because we're removing those of the original bundle
+
         for (key in copy.keySet()) {
-            val value = copy[key] // Extract the value associated with the key
+            val value = copy[key]
             bundle.remove(key)
             val newBundleSize = sizeAsParcel(bundle)
             val valueSize = bundleSize - newBundleSize
             bundleSize = newBundleSize
-            // Check if the value is a nested bundle
+
             val subTree = if (value is Bundle) {
-                sizeTreeFromBundle(value, key) // Pass the key of the nested bundle
+                // Pass the current bundle to the recursive call
+                sizeTreeFromBundle(value, key)
             } else {
-                SizeTree(key, valueSize, emptyList(), value) // Store the value
+                SizeTree(key, valueSize, emptyList(), value)
             }
             results.add(subTree)
         }
     } finally {
-        // Put everything back into original bundle
         bundle.putAll(copy)
     }
 
-    return SizeTree(
-        keyName,
-        sizeAsParcel(bundle),
-        results,
-        null // Root bundle itself doesn't have a single value
-    )
+    // Check for Mavericks saved state within the current bundle
+    if (copy.containsKey("mvrx:saved_instance_state") && copy.containsKey("mvrx:saved_state_class")) {
+        return handleMvrxSavedInstanceState(
+            keyName,
+            copy,
+            sizeAsParcel(bundle)
+        )
+    } else {
+        return SizeTree(
+            keyName,
+            sizeAsParcel(bundle),
+            results,
+            null
+        )
+    }
 }
 
+fun handleMvrxSavedInstanceState(
+    key: String,
+    mvrxBundle: Bundle,
+    valueSize: Int
+): SizeTree {
+    val mvrxStateClassValue = mvrxBundle.get("mvrx:saved_state_class")
+    val mvrxStateClassName = when (mvrxStateClassValue) {
+        is Class<*> -> mvrxStateClassValue.name
+        is String -> mvrxStateClassValue.removePrefix("class ")
+        else -> mvrxStateClassValue?.toString()?.removePrefix("class ")
+    }
 
+    if (mvrxStateClassName != null) {
+        try {
+            // Load the Mavericks state class using reflection
+            val mvrxStateClass = Class.forName(mvrxStateClassName).kotlin
+
+            // Get the primary constructor
+            val primaryConstructor = mvrxStateClass.primaryConstructor
+            if (primaryConstructor == null) {
+                Log.e("TooLargeTool", "No primary constructor found for $mvrxStateClassName")
+                return SizeTree(
+                    key,
+                    valueSize,
+                    listOf(SizeTree("No primary constructor found for $mvrxStateClassName", 0, emptyList(), null)),
+                    null
+                )
+            }
+
+            // Get the parameter names in order
+            primaryConstructor.isAccessible = true // Ensure we can access it
+            val parameterNames = primaryConstructor.parameters.map { it.name ?: "unknown" }
+
+            // Build the mapping from index to parameter name
+            val indexToPropertyNameMap = parameterNames.mapIndexed { index, name ->
+                index.toString() to name
+            }.toMap()
+
+            val mvrxSavedStateBundle = mvrxBundle.getBundle("mvrx:saved_instance_state")
+            val newMvrxSavedStateBundle = Bundle()
+            if (mvrxSavedStateBundle != null) {
+                for (k in mvrxSavedStateBundle.keySet()) {
+                    val propertyName = indexToPropertyNameMap[k] ?: k // If no match, keep original key
+                    val v = mvrxSavedStateBundle.get(k)
+                    when (v) {
+                        is Bundle -> newMvrxSavedStateBundle.putBundle(propertyName, v)
+                        is Parcelable -> newMvrxSavedStateBundle.putParcelable(propertyName, v)
+                        is String -> newMvrxSavedStateBundle.putString(propertyName, v)
+                        is Int -> newMvrxSavedStateBundle.putInt(propertyName, v)
+                        is Long -> newMvrxSavedStateBundle.putLong(propertyName, v)
+                        is Double -> newMvrxSavedStateBundle.putDouble(propertyName, v)
+                        is Float -> newMvrxSavedStateBundle.putFloat(propertyName, v)
+                        is Serializable -> newMvrxSavedStateBundle.putSerializable(propertyName, v)
+                        else -> newMvrxSavedStateBundle.putString(propertyName, v.toString())
+                    }
+                }
+            }
+
+            val subTree = sizeTreeFromBundle(newMvrxSavedStateBundle, keyName = key)
+            return SizeTree(
+                key,
+                valueSize,
+                subTree.subTrees,
+                null
+            )
+        } catch (e: Exception) {
+            Log.e("TooLargeTool", "Error processing mvrx:saved_instance_state: ${e.message}", e)
+            return SizeTree(
+                key,
+                valueSize,
+                listOf(SizeTree("Error processing mvrx:saved_instance_state: ${e.message}", 0, emptyList(), null)),
+                null
+            )
+        }
+    } else {
+        Log.w("TooLargeTool", "mvrx:saved_state_class not found or invalid")
+        return SizeTree(
+            key,
+            valueSize,
+            listOf(SizeTree("mvrx:saved_state_class not found", 0, emptyList(), null)),
+            null
+        )
+    }
+}
 
 /**
  * Measure the size of a typed [Bundle] when written to a [Parcel].

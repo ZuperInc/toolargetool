@@ -8,6 +8,8 @@ test-ext-junit = "1.2.1"
 mockito = "5.4.0"
 test-rules = "1.6.1"
 
+mavericks = "3.0.9"
+
 nexus-publish = "2.0.0"
 
 [libraries]
@@ -15,6 +17,7 @@ appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat"
 ext-junit = { module = "androidx.test.ext:junit", version.ref = "test-ext-junit" }
 junit = { module = "junit:junit", version.ref = "junit" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+mavericks = { group = "com.airbnb.android", name = "mavericks", version.ref = "mavericks" }
 mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockito" }
 testRules = { module = "androidx.test:rules", version.ref = "test-rules" }
 

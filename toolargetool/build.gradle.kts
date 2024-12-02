@@ -31,6 +31,8 @@ android {
 dependencies {
     implementation(libs.kotlin.stdlib)
     implementation(libs.appcompat)
+    implementation(libs.mavericks)
+    implementation(kotlin("reflect"))
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.testRules)
@@ -42,7 +44,7 @@ publishing {
         register<MavenPublication>("release") {
             groupId = "com.gu.android"
             artifactId = "toolargetool"
-            version = "0.3.2"
+            version = "0.3.3"
             afterEvaluate {
                 from(components["release"])
             }
