@@ -6,5 +6,6 @@ package com.gu.toolargetool
 data class SizeTree(
         val key: String,
         val totalSize: Int,
-        val subTrees: List<SizeTree> = emptyList()
+        val subTrees: List<SizeTree> = emptyList(),
+        val value: Any? = null // Added value to store the actual data
 )

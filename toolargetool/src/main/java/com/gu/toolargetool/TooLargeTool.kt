@@ -56,21 +56,28 @@ object TooLargeTool {
      * @return a nicely formatted string (multi-line)
      */
     @JvmStatic
-    fun bundleBreakdown(bundle: Bundle): String {
-        val (key, totalSize, subTrees) = sizeTreeFromBundle(bundle)
-        var result = String.format(
+    fun bundleBreakdown(bundle: Bundle, rootKeyName: String = "RootBundle"): String {
+        val sizeTree = sizeTreeFromBundle(bundle, rootKeyName)
+
+        fun formatSizeTree(tree: SizeTree, indentLevel: Int = 0): String {
+            val indent = "  ".repeat(indentLevel) // Indentation for nested levels
+            val subtreeMarker = "*".repeat(indentLevel + 1) // Dynamic subtree marker
+            val valueRepresentation = tree.value?.toString() ?: "N/A" // Represent the value
+            val header = String.format(
                 Locale.UK,
-                "%s contains %d keys and measures %,.1f KB when serialized as a Parcel",
-                key, subTrees.size, KB(totalSize)
-        )
-        for ((key1, totalSize1) in subTrees) {
-            result += String.format(
-                    Locale.UK,
-                    "\n* %s = %,.1f KB",
-                    key1, KB(totalSize1)
+                "%s%s %s contains %d keys, measures %,.1f KB, value: %s",
+                indent, subtreeMarker, tree.key, tree.subTrees.size, KB(tree.totalSize), valueRepresentation
             )
+
+            val children = tree.subTrees.joinToString(separator = "\n") { child ->
+                formatSizeTree(child, indentLevel + 1) // Recursive call for nested subTrees
+            }
+
+            return if (children.isEmpty()) header else "$header\n$children"
         }
-        return result
+
+        // Format the root SizeTree
+        return formatSizeTree(sizeTree)
     }
 
     private fun KB(bytes: Int): Float {
@@ -86,8 +93,16 @@ object TooLargeTool {
      */
     @JvmOverloads
     @JvmStatic
-    fun startLogging(application: Application, priority: Int = Log.DEBUG, tag: String = "TooLargeTool") {
-        startLogging(application, DefaultFormatter(), LogcatLogger(priority, tag))
+    fun startLogging(
+        application: Application,
+        priority: Int = Log.DEBUG,
+        tag: String = "TooLargeTool"
+    ) {
+        startLogging(
+            application = application,
+            formatter = DefaultFormatter(),
+            logger = LogcatLogger(priority, tag)
+        )
     }
 
     @JvmStatic
@@ -128,7 +143,7 @@ object TooLargeTool {
  * @param bundle to measure
  * @return a map from keys to value sizes in bytes
  */
-fun sizeTreeFromBundle(bundle: Bundle): SizeTree {
+fun sizeTreeFromBundle(bundle: Bundle, keyName: String = "root"): SizeTree {
     val results = ArrayList<SizeTree>(bundle.size())
     // We measure the totalSize of each value by measuring the total totalSize of the bundle before and
     // after removing that value and calculating the difference. We make a copy of the original
@@ -140,18 +155,33 @@ fun sizeTreeFromBundle(bundle: Bundle): SizeTree {
         var bundleSize = sizeAsParcel(bundle)
         // Iterate over copy's keys because we're removing those of the original bundle
         for (key in copy.keySet()) {
+            val value = copy[key] // Extract the value associated with the key
             bundle.remove(key)
             val newBundleSize = sizeAsParcel(bundle)
             val valueSize = bundleSize - newBundleSize
-            results.add(SizeTree(key, valueSize, emptyList()))
             bundleSize = newBundleSize
+            // Check if the value is a nested bundle
+            val subTree = if (value is Bundle) {
+                sizeTreeFromBundle(value, key) // Pass the key of the nested bundle
+            } else {
+                SizeTree(key, valueSize, emptyList(), value) // Store the value
+            }
+            results.add(subTree)
         }
     } finally {
         // Put everything back into original bundle
         bundle.putAll(copy)
     }
-    return SizeTree("Bundle" + System.identityHashCode(bundle), sizeAsParcel(bundle), results)
+
+    return SizeTree(
+        keyName,
+        sizeAsParcel(bundle),
+        results,
+        null // Root bundle itself doesn't have a single value
+    )
 }
+
+
 
 /**
  * Measure the size of a typed [Bundle] when written to a [Parcel].
